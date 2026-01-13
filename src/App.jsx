@@ -20,6 +20,7 @@ import {
   Minus, 
   Plus,
   CheckCircle,
+  XCircle,
   ClipboardList 
 } from 'lucide-react';
 
@@ -44,26 +45,35 @@ const App = () => {
   // 搜尋與篩選
   const [searchTerm, setSearchTerm] = useState(""); 
 
-  // --- 各頁面專用篩選 ---
+  // --- 進料紀錄專用篩選 ---
   const [inboundFilterContract, setInboundFilterContract] = useState("");
   const [inboundFilterBrand, setInboundFilterBrand] = useState("");
   const [inboundFilterModel, setInboundFilterModel] = useState("");
   const [inboundFilterPart, setInboundFilterPart] = useState("");
+  const [inboundFilterCategory, setInboundFilterCategory] = useState(""); // 分類篩選 (0或1)
 
+  // --- 出料紀錄專用篩選 ---
   const [outboundFilterProjectID, setOutboundFilterProjectID] = useState("");
   const [outboundFilterBrand, setOutboundFilterBrand] = useState("");
   const [outboundFilterModel, setOutboundFilterModel] = useState("");
   const [outboundFilterPart, setOutboundFilterPart] = useState("");
   const [outboundFilterLocation, setOutboundFilterLocation] = useState(""); 
 
+  // --- 料庫總覽專用篩選 ---
   const [overviewFilterBrand, setOverviewFilterBrand] = useState("");
   const [overviewFilterModel, setOverviewFilterModel] = useState("");
   const [overviewFilterPart, setOverviewFilterPart] = useState("");
   
+  // 機型管理專用篩選與輸入
   const [mgmtBrand, setMgmtBrand] = useState(""); 
   const [mgmtModel, setMgmtModel] = useState(""); 
   const [newPartName, setNewPartName] = useState(""); 
   const [newPartRefQty, setNewPartRefQty] = useState(""); 
+  const [newPartCategory, setNewPartCategory] = useState("0");
+
+  // --- 機型管理：編輯狀態 ---
+  const [editingTarget, setEditingTarget] = useState(null); 
+  const [editingForm, setEditingForm] = useState({});       
 
   // Modal 控制
   const [modalOpen, setModalOpen] = useState(false);
@@ -122,6 +132,7 @@ const App = () => {
       return [...new Set(inbound.filter(m => m.Brand === brand && m.Model === model).map(m => m.PartName).filter(Boolean))];
   };
 
+  // --- 進料紀錄列表 (包含分類篩選邏輯) ---
   const filteredInboundList = useMemo(() => {
       return inbound.filter(item => {
           const matchSearch = JSON.stringify(item).includes(searchTerm);
@@ -129,7 +140,14 @@ const App = () => {
           const matchBrand = inboundFilterBrand ? item.Brand === inboundFilterBrand : true;
           const matchModel = inboundFilterModel ? item.Model === inboundFilterModel : true;
           const matchPart = inboundFilterPart ? item.PartName === inboundFilterPart : true;
-          return matchSearch && matchContract && matchBrand && matchModel && matchPart;
+          
+          // 分類篩選邏輯：若沒選(全部)則通過；否則比對字串 '0' 或 '1'
+          // 預設值處理：若資料無 Category 欄位，視為 '0'
+          const matchCategory = inboundFilterCategory 
+            ? String(item.Category || '0') === inboundFilterCategory 
+            : true;
+
+          return matchSearch && matchContract && matchBrand && matchModel && matchPart && matchCategory;
       }).sort((a, b) => {
           const aHasStock = a.Balance > 0;
           const bHasStock = b.Balance > 0;
@@ -137,7 +155,7 @@ const App = () => {
           if (!aHasStock && bHasStock) return 1;  
           return a.Date.localeCompare(b.Date);
       });
-  }, [inbound, searchTerm, inboundFilterContract, inboundFilterBrand, inboundFilterModel, inboundFilterPart]);
+  }, [inbound, searchTerm, inboundFilterContract, inboundFilterBrand, inboundFilterModel, inboundFilterPart, inboundFilterCategory]);
 
   const filteredOutboundList = useMemo(() => {
       return outbound.filter(item => {
@@ -284,8 +302,6 @@ const App = () => {
   };
 
   // --- 數量與刪除邏輯 ---
-  
-  // 1. 按鈕控制數量 (Delta)
   const handleQtyChange = (partName, delta, maxLimit = null) => {
       setPartQuantities(prev => {
           const currentQty = prev[partName] || 0;
@@ -296,17 +312,11 @@ const App = () => {
       });
   };
 
-  // 2. 新增：手動輸入控制數量 (Input)
   const handleManualQtyChange = (partName, valueStr, maxLimit = null) => {
       let val = parseInt(valueStr);
-      if (isNaN(val)) val = 0; // 若清空則為 0
-      if (val < 0) val = 0;    // 不允許負數
-
-      // 若有最大值限制 (出料/維修)，且輸入值超過庫存，則修正為最大值
-      if (maxLimit !== null && val > maxLimit) {
-          val = maxLimit;
-      }
-
+      if (isNaN(val)) val = 0; 
+      if (val < 0) val = 0;    
+      if (maxLimit !== null && val > maxLimit) val = maxLimit;
       setPartQuantities(prev => ({ ...prev, [partName]: val }));
   };
 
@@ -395,6 +405,29 @@ const App = () => {
       setMaintenance(maintenance.filter(m => m !== item));
   };
 
+  // --- 機型管理：編輯邏輯 ---
+  const handleStartEdit = (item) => {
+      setEditingTarget(item);
+      setEditingForm({ ...item });
+  };
+
+  const handleCancelEdit = () => {
+      setEditingTarget(null);
+      setEditingForm({});
+  };
+
+  const handleSaveEdit = () => {
+      const updatedModels = models.map(m => m === editingTarget ? editingForm : m);
+      setModels(updatedModels);
+      setEditingTarget(null);
+      setEditingForm({});
+  };
+
+  const handleEditChange = (field, value) => {
+      setEditingForm(prev => ({ ...prev, [field]: value }));
+  };
+
+  // --- 表單提交 ---
   const handleSubmit = () => {
     if (modalType === 'ADD_INBOUND') {
         if (!formContractID || !formBatch) return alert("請填寫契約編號與批次");
@@ -406,7 +439,8 @@ const App = () => {
                 newRecords.push({
                     Date: formDate, ContractID: formContractID, Batch: formBatch,
                     Brand: inboundBrand, Model: inboundModel, PartName: part.PartName,
-                    InQty: qty, Balance: qty 
+                    InQty: qty, Balance: qty,
+                    Category: part.Category || "0" 
                 });
             }
         });
@@ -467,8 +501,15 @@ const App = () => {
   const handleAddPartToModel = () => {
       if (!mgmtBrand || !mgmtModel) return alert("請先篩選廠牌與機型");
       if (!newPartName) return alert("請輸入料件名稱");
-      const newPart = { Brand: mgmtBrand, Model: mgmtModel, PartName: newPartName, RefQty: parseInt(newPartRefQty) || 0 };
-      setModels([...models, newPart]); setNewPartName(""); setNewPartRefQty("");
+      const newPart = { 
+          Brand: mgmtBrand, 
+          Model: mgmtModel, 
+          PartName: newPartName, 
+          RefQty: parseInt(newPartRefQty) || 0,
+          Category: newPartCategory 
+      };
+      setModels([...models, newPart]); 
+      setNewPartName(""); setNewPartRefQty(""); setNewPartCategory("0");
   };
 
   const handleDeleteModelItem = (itemToDelete) => {
@@ -552,6 +593,10 @@ const App = () => {
                     <div className="flex items-center gap-2"><label className="text-xs text-gray-500">廠牌</label><select className="border rounded px-2 py-1 text-sm bg-white" value={inboundFilterBrand} onChange={e=>{setInboundFilterBrand(e.target.value);setInboundFilterModel("");setInboundFilterPart("")}}><option value="">全部</option>{uniqueInboundBrands.map(b=><option key={b} value={b}>{b}</option>)}</select></div>
                     <div className="flex items-center gap-2"><label className="text-xs text-gray-500">機型</label><select className="border rounded px-2 py-1 text-sm bg-white" value={inboundFilterModel} onChange={e=>{setInboundFilterModel(e.target.value);setInboundFilterPart("")}} disabled={!inboundFilterBrand}><option value="">全部</option>{getInboundModelsByBrand(inboundFilterBrand).map(m=><option key={m} value={m}>{m}</option>)}</select></div>
                     <div className="flex items-center gap-2"><label className="text-xs text-gray-500">料件</label><select className="border rounded px-2 py-1 text-sm bg-white" value={inboundFilterPart} onChange={e=>setInboundFilterPart(e.target.value)} disabled={!inboundFilterModel}><option value="">全部</option>{getInboundPartsByModel(inboundFilterBrand, inboundFilterModel).map(p=><option key={p} value={p}>{p}</option>)}</select></div>
+                    
+                    {/* 分類篩選選單 */}
+                    <div className="flex items-center gap-2"><label className="text-xs text-gray-500">分類</label><select className="border rounded px-2 py-1 text-sm bg-white w-20" value={inboundFilterCategory} onChange={e=>setInboundFilterCategory(e.target.value)}><option value="">全部</option><option value="0">0</option><option value="1">1</option></select></div>
+
                     <div className="ml-auto text-xs text-gray-400">共 {filteredInboundList.length} 筆</div>
                 </div>
                 <div className="flex-1 bg-white rounded shadow overflow-hidden flex flex-col min-h-0">
@@ -559,13 +604,19 @@ const App = () => {
                         <table className="w-full text-left whitespace-nowrap">
                             <thead className="bg-gray-50 border-b text-xs uppercase text-gray-500 sticky top-0 z-10">
                                 <tr>
-                                    <th className="p-3 w-24">進料日期</th><th className="p-3">契約編號</th><th className="p-3 w-20">批次</th><th className="p-3">廠牌</th><th className="p-3">機型</th><th className="p-3">料件名稱</th><th className="p-3 text-right w-20">進料數量</th><th className="p-3 text-right">剩餘數量</th><th className="p-3 text-center w-12">出料</th><th className="p-3 text-center w-12">送修</th><th className="p-3 text-center w-12 text-red-500">刪除</th>
+                                    <th className="p-3 w-24">進料日期</th><th className="p-3">契約編號</th><th className="p-3 w-20">批次</th><th className="p-3">廠牌</th><th className="p-3">機型</th><th className="p-3">料件名稱</th>
+                                    {/* 新增分類欄位 Header */}
+                                    <th className="p-3 w-16 text-center">分類</th>
+                                    <th className="p-3 text-right w-20">進料數量</th><th className="p-3 text-right">剩餘數量</th><th className="p-3 text-center w-12">出料</th><th className="p-3 text-center w-12">送修</th><th className="p-3 text-center w-12 text-red-500">刪除</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100">
                                 {filteredInboundList.map((item, idx) => (
                                     <tr key={idx} className="hover:bg-gray-50">
-                                        <td className="p-3 text-sm">{item.Date}</td><td className="p-3 text-blue-600 font-medium">{item.ContractID}</td><td className="p-3 text-sm">{item.Batch}</td><td className="p-3 text-sm">{item.Brand}</td><td className="p-3 text-sm">{item.Model}</td><td className="p-3 font-bold">{item.PartName}</td><td className="p-3 text-right text-gray-400">{item.InQty}</td><td className={`p-3 text-right font-bold text-lg ${item.Balance===0?'text-gray-300':'text-blue-600'}`}>{item.Balance}</td>
+                                        <td className="p-3 text-sm">{item.Date}</td><td className="p-3 text-blue-600 font-medium">{item.ContractID}</td><td className="p-3 text-sm">{item.Batch}</td><td className="p-3 text-sm">{item.Brand}</td><td className="p-3 text-sm">{item.Model}</td><td className="p-3 font-bold">{item.PartName}</td>
+                                        {/* 顯示分類內容 */}
+                                        <td className="p-3 text-center text-gray-500 text-sm">{item.Category || '0'}</td>
+                                        <td className="p-3 text-right text-gray-400">{item.InQty}</td><td className={`p-3 text-right font-bold text-lg ${item.Balance===0?'text-gray-300':'text-blue-600'}`}>{item.Balance}</td>
                                         <td className="p-3 text-center"><button onClick={() => openModal('OUT', item)} disabled={item.Balance<=0} className="p-1 text-red-600 hover:bg-red-100 rounded disabled:opacity-30"><ArrowUpCircle size={16}/></button></td>
                                         <td className="p-3 text-center"><button onClick={() => openModal('REPAIR', item)} disabled={item.Balance<=0} className="p-1 text-amber-600 hover:bg-amber-100 rounded disabled:opacity-30"><Wrench size={16}/></button></td>
                                         <td className="p-3 text-center"><button onClick={() => handleDeleteInbound(item)} className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"><Trash2 size={16}/></button></td>
@@ -594,9 +645,7 @@ const App = () => {
                     <div className="flex-1 overflow-auto">
                         <table className="w-full text-left whitespace-nowrap">
                             <thead className="bg-gray-50 border-b text-xs uppercase text-gray-500 sticky top-0 z-10">
-                                <tr>
-                                    <th className="p-3 w-24">出料日期</th><th className="p-3">契約編號</th><th className="p-3 w-20">批次</th><th className="p-3 font-bold text-purple-600">工程編號</th><th className="p-3 w-20">廠牌</th><th className="p-3">機型</th><th className="p-3">料件名稱</th><th className="p-3 text-right text-red-600">消耗數量</th><th className="p-3 w-96">地點</th><th className="p-3 text-center w-16 text-red-500">刪除</th>
-                                </tr>
+                                <tr><th className="p-3 w-24">出料日期</th><th className="p-3">契約編號</th><th className="p-3 w-20">批次</th><th className="p-3 font-bold text-purple-600">工程編號</th><th className="p-3 w-20">廠牌</th><th className="p-3">機型</th><th className="p-3">料件名稱</th><th className="p-3 text-right text-red-600">消耗數量</th><th className="p-3 w-96">地點</th><th className="p-3 text-center w-16 text-red-500">刪除</th></tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100">
                                 {filteredOutboundList.map((item, i) => (
@@ -612,7 +661,7 @@ const App = () => {
             </div>
         );
 
-        // ... (Models & Maintenance sections remain same)
+        // --- 4. 機型管理 (Models) ---
         case 'models': return (
             <div className="space-y-4 h-full flex flex-col">
                 <div className="flex justify-between items-center flex-shrink-0">
@@ -627,10 +676,35 @@ const App = () => {
                     </div>
                     <div className="flex-1 overflow-auto">
                         <table className="w-full text-left">
-                            <thead className="bg-gray-50 text-gray-500 text-xs uppercase border-b sticky top-0 z-10"><tr><th className="px-6 py-3">料件名稱</th><th className="px-6 py-3 text-right">數量(參考)</th><th className="px-6 py-3 text-center">編輯</th><th className="px-6 py-3 text-center">刪除</th></tr></thead>
+                            <thead className="bg-gray-50 text-gray-500 text-xs uppercase border-b sticky top-0 z-10"><tr><th className="px-6 py-3">料件名稱</th><th className="px-6 py-3 text-right">數量(參考)</th><th className="px-6 py-3">分類</th><th className="px-6 py-3 text-center">編輯</th><th className="px-6 py-3 text-center">刪除</th></tr></thead>
                             <tbody className="divide-y divide-gray-100">
-                                {mgmtData.map((item, idx) => (<tr key={idx} className="hover:bg-gray-50"><td className="px-6 py-3 font-bold text-gray-800">{item.PartName}</td><td className="px-6 py-3 text-right text-gray-500">{item.RefQty || '-'}</td><td className="px-6 py-3 text-center"><button className="text-blue-600 hover:text-blue-800"><Edit size={16}/></button></td><td className="px-6 py-3 text-center"><button onClick={() => handleDeleteModelItem(item)} className="text-red-600 hover:text-red-800"><Trash2 size={16}/></button></td></tr>))}
-                                {(mgmtBrand && mgmtModel) && (<tr className="bg-blue-50/50"><td className="px-6 py-3"><input type="text" placeholder="輸入新料件名稱..." className="w-full border-b border-blue-300 bg-transparent focus:outline-none focus:border-blue-600 text-sm py-1" value={newPartName} onChange={(e) => setNewPartName(e.target.value)}/></td><td className="px-6 py-3 text-right"><input type="number" placeholder="數量" className="w-20 border-b border-blue-300 bg-transparent focus:outline-none focus:border-blue-600 text-sm py-1 text-right" value={newPartRefQty} onChange={(e) => setNewPartRefQty(e.target.value)}/></td><td colSpan="2" className="px-6 py-3 text-center"><button onClick={handleAddPartToModel} className="flex items-center justify-center gap-1 text-blue-600 text-sm font-bold hover:underline w-full"><PlusSquare size={16}/> 新增</button></td></tr>)}
+                                {mgmtData.map((item, idx) => {
+                                    const isEditing = editingTarget === item;
+                                    return (
+                                        <tr key={idx} className={`hover:bg-gray-50 ${isEditing ? 'bg-blue-50' : ''}`}>
+                                            <td className="px-6 py-3 font-bold text-gray-800">{isEditing ? (<input className="border-b border-blue-500 bg-transparent w-full focus:outline-none" value={editingForm.PartName} onChange={(e) => handleEditChange('PartName', e.target.value)} />) : (item.PartName)}</td>
+                                            <td className="px-6 py-3 text-right text-gray-500">{isEditing ? (<input type="number" className="border-b border-blue-500 bg-transparent w-20 text-right focus:outline-none" value={editingForm.RefQty} onChange={(e) => handleEditChange('RefQty', parseInt(e.target.value)||0)} />) : (item.RefQty || '-')}</td>
+                                            <td className="px-6 py-3 text-gray-500">{isEditing ? (<select className="border-b border-blue-500 bg-transparent focus:outline-none" value={editingForm.Category} onChange={(e) => handleEditChange('Category', e.target.value)}><option value="0">0</option><option value="1">1</option></select>) : (item.Category || '0')}</td>
+                                            <td className="px-6 py-3 text-center">
+                                                {isEditing ? (
+                                                    <div className="flex gap-2 justify-center">
+                                                        <button onClick={handleSaveEdit} className="text-green-600 hover:text-green-800"><CheckCircle size={18}/></button>
+                                                        <button onClick={handleCancelEdit} className="text-gray-400 hover:text-gray-600"><XCircle size={18}/></button>
+                                                    </div>
+                                                ) : (<button onClick={() => handleStartEdit(item)} className="text-blue-600 hover:text-blue-800"><Edit size={16}/></button>)}
+                                            </td>
+                                            <td className="px-6 py-3 text-center"><button onClick={() => handleDeleteModelItem(item)} className="text-red-600 hover:text-red-800" disabled={isEditing}><Trash2 size={16}/></button></td>
+                                        </tr>
+                                    );
+                                })}
+                                {(mgmtBrand && mgmtModel) && (
+                                    <tr className="bg-blue-50/50">
+                                        <td className="px-6 py-3"><input type="text" placeholder="輸入新料件名稱..." className="w-full border-b border-blue-300 bg-transparent focus:outline-none focus:border-blue-600 text-sm py-1" value={newPartName} onChange={(e) => setNewPartName(e.target.value)}/></td>
+                                        <td className="px-6 py-3 text-right"><input type="number" placeholder="數量" className="w-20 border-b border-blue-300 bg-transparent focus:outline-none focus:border-blue-600 text-sm py-1 text-right" value={newPartRefQty} onChange={(e) => setNewPartRefQty(e.target.value)}/></td>
+                                        <td className="px-6 py-3"><select className="border-b border-blue-300 bg-transparent focus:outline-none focus:border-blue-600 text-sm py-1" value={newPartCategory} onChange={(e) => setNewPartCategory(e.target.value)}><option value="0">0</option><option value="1">1</option></select></td>
+                                        <td colSpan="2" className="px-6 py-3 text-center"><button onClick={handleAddPartToModel} className="flex items-center justify-center gap-1 text-blue-600 text-sm font-bold hover:underline w-full"><PlusSquare size={16}/> 新增</button></td>
+                                    </tr>
+                                )}
                             </tbody>
                         </table>
                         {(!mgmtBrand || !mgmtModel) && <div className="p-8 text-center text-gray-400">請先在上方篩選「廠牌」與「機型」以管理料件</div>}
@@ -639,6 +713,7 @@ const App = () => {
             </div>
         );
 
+        // ... (Maintenance section remains same)
         case 'maintenance': return (
             <div className="space-y-4 h-full flex flex-col">
                 <h2 className="text-2xl font-bold flex items-center gap-2 flex-shrink-0"><Wrench className="text-amber-600"/> 維修紀錄</h2>
